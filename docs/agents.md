@@ -41,7 +41,11 @@ El orden se puede cambiar con `ALLAGENTS_PRIORITY` (ver README).
   | qwen2.5-coder:32b | Denso (~20 GB) | 1,7 tokens/s |
 
   Con poca RAM, usa modelos de 7–8B.
-- **Contexto:** `OLLAMA_NUM_CTX` (16384 por defecto). Más contexto consume más memoria.
+- **Contexto:** `OLLAMA_NUM_CTX` (16384 por defecto). Más contexto consume más memoria de
+  vídeo: si el modelo casi llena la GPU, Ollama puede caerse (`llama-server process has
+  terminated … CUDA error`); bájalo a 12288 u 8192. `allagents init` propone un valor
+  según cuánto del modelo cabe en la VRAM (medido: un modelo de 18 GB en una GPU de
+  16 GB funciona con 12288).
 - Si Ollama no responde al arrancar, la herramienta no se publica.
 
 ## 2. ask_groq — Groq

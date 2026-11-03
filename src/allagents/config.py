@@ -6,17 +6,21 @@ Fuentes, de menor a mayor prioridad:
   3. Variables de entorno del proceso.
 
 El ``.env`` se ignora por completo si otros usuarios pueden leerlo o si no
-pertenece al usuario actual: así una clave nunca se usa desde un archivo
-expuesto. No se usa python-dotenv para no añadir dependencias.
+pertenece al usuario actual (permisos POSIX o ACL de NTFS, ver ``osutil``): así
+una clave nunca se usa desde un archivo expuesto. No se usa python-dotenv para
+no añadir dependencias.
+
+Las listas de carpetas se separan con ``:`` en Linux/macOS y con ``;`` en Windows.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import stat
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from . import osutil
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
@@ -51,19 +55,22 @@ def parse_env_file(text: str) -> dict[str, str]:
 
 def env_file_problem(path: Path) -> str | None:
     """Devuelve el motivo por el que ``path`` no es seguro, o None si lo es."""
-    st = path.stat()
-    if not stat.S_ISREG(st.st_mode):
-        return f"{path} no es un archivo normal"
-    if st.st_uid != os.getuid():
-        return f"{path} no pertenece a tu usuario"
-    if st.st_mode & 0o077:
-        return (f"{path} tiene permisos {oct(st.st_mode & 0o777)} (otros usuarios "
-                f"pueden leerlo); ejecuta: chmod 600 {path}")
-    return None
+    return osutil.private_file_problem(path)
 
 
 def _expand_paths(raw: str) -> tuple[Path, ...]:
-    return tuple(Path(p).expanduser().resolve() for p in raw.split(":") if p.strip())
+    return osutil.split_path_list(raw)[0]
+
+
+def _default_allowed_dirs() -> str:
+    # La carpeta Documentos real (en Windows puede estar redirigida a OneDrive u otra
+    # unidad) más los nombres habituales.
+    docs = osutil.documents_dir()
+    candidates = [str(docs)] if docs else []
+    return os.pathsep.join(dict.fromkeys([*candidates, "~/Documentos", "~/Documents"]))
+
+
+_DEFAULT_ALLOWED_DIRS = _default_allowed_dirs()
 
 
 @dataclass(frozen=True)
@@ -93,11 +100,16 @@ class Settings:
 
     @property
     def allowed_dirs(self) -> tuple[Path, ...]:
-        return _expand_paths(self.get("ALLAGENTS_ALLOWED_DIRS", "~/Documentos:~/Documents"))
+        return _expand_paths(self.get("ALLAGENTS_ALLOWED_DIRS", _DEFAULT_ALLOWED_DIRS))
 
     @property
     def local_only_dirs(self) -> tuple[Path, ...]:
         return _expand_paths(self.get("ALLAGENTS_LOCAL_ONLY_DIRS"))
+
+    def ignored_dir_entries(self) -> tuple[str, ...]:
+        """Entradas de las listas de carpetas que se descartaron (relativas o mal separadas)."""
+        return (osutil.split_path_list(self.get("ALLAGENTS_ALLOWED_DIRS", _DEFAULT_ALLOWED_DIRS))[1]
+                + osutil.split_path_list(self.get("ALLAGENTS_LOCAL_ONLY_DIRS"))[1])
 
     @property
     def priority(self) -> tuple[str, ...]:
@@ -153,7 +165,7 @@ def load_settings(environ: dict[str, str] | None = None) -> Settings:
     if env_file.exists():
         env_error = env_file_problem(env_file)
         if env_error is None:
-            file_values = parse_env_file(env_file.read_text(encoding="utf-8"))
+            file_values = parse_env_file(env_file.read_text(encoding="utf-8-sig"))
 
     # Las variables de entorno con valor ganan al .env.
     values = {**file_values, **{k: v for k, v in environ.items() if v}}

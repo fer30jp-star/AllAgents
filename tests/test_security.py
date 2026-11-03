@@ -2,17 +2,21 @@ from pathlib import Path
 
 import pytest
 
+from allagents import osutil
 from allagents.config import Settings
 from allagents.files import build_prompt, load_files
 from allagents.security import (
     REDACTED,
     SecurityError,
     check_file_access,
+    check_model_name,
     child_env,
     redact,
     require_https,
     require_loopback,
 )
+
+from conftest import symlink_or_skip
 
 
 @pytest.fixture
@@ -75,7 +79,7 @@ def test_blocks_symlink_escaping_allowed_dir(workspace):
     target = outside / "secreto.txt"
     target.write_text("x")
     link = allowed / "inocente.txt"
-    link.symlink_to(target)
+    symlink_or_skip(link, target)
     with pytest.raises(SecurityError, match="ALLOWED_DIRS"):
         check_file_access(str(link), settings, local_agent=True)
 
@@ -85,7 +89,7 @@ def test_blocks_symlink_disguising_sensitive_file(workspace):
     target = allowed / ".env"
     target.write_text("GROQ_API_KEY=x")
     link = allowed / "config.txt"
-    link.symlink_to(target)
+    symlink_or_skip(link, target)
     with pytest.raises(SecurityError, match="sensible"):
         check_file_access(str(link), settings, local_agent=True)
 
@@ -152,7 +156,7 @@ def test_child_env_drops_api_keys(monkeypatch):
     env = child_env()
     assert "GROQ_API_KEY" not in env
     assert "ANTHROPIC_BASE_URL" not in env
-    assert "HOME" in env and "PATH" in env
+    assert ("USERPROFILE" if osutil.IS_WINDOWS else "HOME") in env and "PATH" in env
 
 
 @pytest.mark.parametrize("url", ["http://127.0.0.1:11434", "http://localhost:11434",
@@ -172,3 +176,16 @@ def test_cloud_urls_must_be_https():
     assert require_https("https://api.groq.com/openai/v1/")
     with pytest.raises(SecurityError):
         require_https("http://api.groq.com/openai/v1")
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash-medium", "qwen3-coder:30b",
+                                   "deepseek/deepseek-chat", "gpt-5.1-codex", ""])
+def test_valid_model_names(model):
+    assert check_model_name(model) == model
+
+
+@pytest.mark.parametrize("model", ['x" & calc', "--dangerously-skip-permissions",
+                                   "a b", "x;rm -rf /", "%PATH%"])
+def test_model_names_that_could_inject_arguments_are_rejected(model):
+    with pytest.raises(SecurityError, match="modelo"):
+        check_model_name(model)

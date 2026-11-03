@@ -1,0 +1,6 @@
+# Finales de línea fijos: con CRLF, bash no puede ejecutar los scripts
+# (Git for Windows con core.autocrlf=true los convertiría al hacer checkout).
+* text=auto
+*.sh text eol=lf
+scripts/git-hooks/* text eol=lf
+*.ps1 text eol=crlf

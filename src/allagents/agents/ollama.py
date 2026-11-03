@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 import urllib.request
 
-from ..clients.http import get_json, post_json
+from ..clients.http import HttpError, get_json, post_json
 from ..config import Settings
 from ..files import build_prompt
 from ..security import SecurityError, require_loopback
@@ -85,8 +85,17 @@ def register(server, settings: Settings) -> None:
             payload = {"model": model, "stream": False, "options": {"num_ctx": num_ctx},
                        "messages": [{"role": "user", "content": build_prompt(prompt, loaded)}]}
             start = time.monotonic()
-            data = await post_json(f"{_url(settings)}/api/chat", payload, headers={},
-                                   timeout_s=settings.timeout_s)
+            try:
+                data = await post_json(f"{_url(settings)}/api/chat", payload, headers={},
+                                       timeout_s=settings.timeout_s)
+            except HttpError as exc:
+                text = str(exc)
+                if any(s in text for s in ("llama-server process has terminated", "CUDA error",
+                                           "out of memory", "memory")):
+                    # Medido: un modelo de 18 GB en una GPU de 16 GB se cae con num_ctx=16384.
+                    text += (f" — Ollama no pudo cargar {model} con num_ctx={num_ctx}: suele ser "
+                             "falta de memoria de vídeo. Baja OLLAMA_NUM_CTX (p. ej. 12288 u 8192).")
+                raise AgentError(text) from None
             if "error" in data:
                 raise AgentError(data["error"])
             return AgentResult(agent=NAME, model=model,

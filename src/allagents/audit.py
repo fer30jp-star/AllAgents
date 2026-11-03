@@ -1,15 +1,17 @@
 """Registro de auditoría: qué se delegó, a quién, cuánto tardó y si falló.
 
 Solo metadatos. Nunca se registran prompts, contenido de archivos,
-respuestas ni claves. El archivo se crea con permisos 600.
+respuestas ni claves. La carpeta y el archivo solo son accesibles para el
+usuario (permisos 700/600 o, en Windows, ACL privada).
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from . import osutil
 
 _logger = logging.getLogger("allagents.audit")
 
@@ -19,7 +21,14 @@ def setup(log_file: Path) -> None:
         return
     log_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     log_file.touch(mode=0o600, exist_ok=True)
-    os.chmod(log_file, 0o600)
+    if osutil.IS_WINDOWS:
+        # En Windows mode= no protege nada: se revisa la ACL y, si hace falta, se
+        # restringe la carpeta (lo que se cree dentro, incluidas las rotaciones, la hereda).
+        if osutil.private_file_problem(log_file):
+            osutil.restrict_to_user(log_file.parent)
+            osutil.restrict_to_user(log_file)
+    else:
+        osutil.restrict_to_user(log_file)
     handler = RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     _logger.addHandler(handler)

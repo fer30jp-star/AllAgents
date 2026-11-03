@@ -3,10 +3,18 @@
 # hook de git que impide subir secretos. Se puede ejecutar varias veces.
 #   ./scripts/setup.sh              instala
 #   ./scripts/setup.sh --register   instala y lo registra en Claude Code
+#   ./scripts/setup.sh --no-init    no lanza el asistente de configuración
 set -euo pipefail
 
 REGISTER=0
-[ "${1:-}" = "--register" ] && REGISTER=1
+INIT=1
+for arg in "$@"; do
+  case "$arg" in
+    --register) REGISTER=1 ;;
+    --no-init) INIT=0 ;;
+    *) echo "Opción desconocida: $arg" >&2; exit 2 ;;
+  esac
+done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -27,16 +35,23 @@ chmod 600 .env
 mkdir -p logs && chmod 700 logs
 
 echo "==> Hook de git contra secretos"
-if [ -d .git ]; then
+if [ -d .git ] && command -v git >/dev/null; then
   git config core.hooksPath scripts/git-hooks
   chmod +x scripts/git-hooks/pre-commit
   echo "    Activado (scripts/git-hooks/pre-commit)."
 else
-  echo "    Aún no es un repositorio git; vuelve a ejecutar este script tras 'git init'."
+  echo "    Sin git o aún no es un repositorio; vuelve a ejecutar este script tras instalar git o 'git init'."
 fi
 
 echo
-.venv/bin/allagents check
+if [ "$INIT" -eq 1 ] && [ -t 0 ] && [ -t 1 ]; then
+  # Analiza el equipo, pregunta por tus servicios y propone el .env (luego hace check).
+  echo "==> Configuración (allagents init; Ctrl+C para saltarla)"
+  .venv/bin/allagents init || true
+else
+  .venv/bin/allagents check
+  echo "Para configurarlo con un asistente: .venv/bin/allagents init"
+fi
 echo
 
 SERVE=("$ROOT/.venv/bin/allagents" serve)

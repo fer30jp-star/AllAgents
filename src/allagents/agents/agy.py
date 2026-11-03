@@ -3,7 +3,10 @@
 Confinamiento verificado (2026-11-02, agy en modo print):
 - Sin estos ajustes agy escribe archivos sin pedir permiso. Por eso cada
   llamada corre en una carpeta temporal vacía que se borra al terminar.
-- ``allowNonWorkspaceAccess=false``: no puede leer nada fuera de esa carpeta.
+- ``allowNonWorkspaceAccess=false``: no puede leer nada fuera de esa carpeta,
+  SALVO la carpeta temporal del sistema (verificado en Windows: leyó un archivo
+  de %TEMP%). Por eso el hijo recibe TEMP/TMP/TMPDIR dentro de su propio espacio
+  de trabajo (``clients.cli._workspace_env``); con eso ya no la alcanza.
 - ``deny command(*) / mcp(*)``: sin terminal ni servidores MCP.
 - ``--sandbox``: sandbox de terminal de agy como capa extra.
 - El prompt va por stdin (stream-json), no por argumentos: no aparece en
@@ -17,6 +20,7 @@ import json
 
 from ..clients.cli import find_bin, isolated_workspace, run_cli
 from ..config import Settings
+from ..security import check_model_name
 from ..files import build_prompt
 from .base import CLOUD_TOOL, TIER_SUBSCRIPTION, AgentError, AgentResult, delegate
 
@@ -90,6 +94,7 @@ def register(server, settings: Settings) -> None:
         use_model = model or default_model
 
         async def call(loaded):
+            check_model_name(use_model)  # va como argumento del CLI
             message = json.dumps({"event": "user",
                                   "message": {"content": build_prompt(prompt, loaded)}})
             async with isolated_workspace() as ws:

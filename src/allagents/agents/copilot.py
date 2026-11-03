@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from ..clients.cli import MAX_ARGV_PROMPT_BYTES, find_bin, isolated_workspace, run_cli
 from ..config import Settings
+from ..security import check_model_name
 from ..files import build_prompt
 from .base import CLOUD_TOOL, TIER_SUBSCRIPTION, AgentError, AgentResult, delegate
 
@@ -43,7 +44,7 @@ def register(server, settings: Settings) -> None:
 
         Úsala para: dudas de código ligadas al ecosistema GitHub (Actions, workflows,
         configuración de repositorios). Para lo demás hay opciones mejores.
-        NO la uses con datos sensibles. Límite: ~120 KB entre prompt y archivos.
+        NO la uses con datos sensibles. Límite: ~120 KB entre prompt y archivos (~30 KB en Windows).
 
         Args:
             prompt: la tarea, completa y autocontenida.
@@ -53,6 +54,7 @@ def register(server, settings: Settings) -> None:
         use_model = model or default_model
 
         async def call(loaded):
+            check_model_name(use_model)  # va como argumento del CLI
             full = build_prompt(prompt, loaded)
             if len(full.encode()) > MAX_ARGV_PROMPT_BYTES:
                 raise AgentError("prompt demasiado grande para Copilot CLI; usa ask_agy")

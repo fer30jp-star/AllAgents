@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from ..clients.cli import find_bin, isolated_workspace, run_cli
 from ..config import Settings
+from ..security import check_model_name
 from ..files import build_prompt
 from .base import CLOUD_TOOL, TIER_SCARCE, AgentError, AgentResult, delegate
 
@@ -63,6 +64,7 @@ def register(server, settings: Settings) -> None:
         use_model = model or default_model
 
         async def call(loaded):
+            check_model_name(use_model)  # va como argumento del CLI
             async with isolated_workspace() as ws:
                 out_file = ws / "respuesta.txt"
                 argv = [_bin(settings), "exec", "--skip-git-repo-check", "--ephemeral",
@@ -77,6 +79,9 @@ def register(server, settings: Settings) -> None:
                                     stdin_text=build_prompt(prompt, loaded))
                 text = out_file.read_text(encoding="utf-8") if out_file.exists() else ""
             if res.returncode != 0 or not text:
+                if "401 Unauthorized" in res.stderr:
+                    raise AgentError("codex no tiene sesión iniciada con ChatGPT: ejecuta "
+                                     "`codex login` en una terminal y vuelve a intentarlo")
                 raise AgentError(res.stderr[-600:].strip() or f"codex salió con código {res.returncode}")
             model_line = next((ln.split(":", 1)[1].strip() for ln in res.stderr.splitlines()
                                if ln.startswith("model:")), use_model)

@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import osutil
 from .config import Settings
 
 
@@ -41,6 +42,30 @@ SENSITIVE_HOME_DIRS = (
     ".local/share/keyrings", ".mozilla", ".config/google-chrome",
     ".config/BraveSoftware", ".zen",
 )
+
+# En Windows las credenciales viven en el perfil (AppData), no en carpetas ocultas.
+_WINDOWS_ROAMING_DIRS = (
+    "GitHub CLI", "gcloud", "Mozilla", "Antigravity", "Code/User/globalStorage",
+    "Microsoft/Credentials", "Microsoft/Protect", "Microsoft/Crypto",
+    "Microsoft/SystemCertificates", "Microsoft/Vault",
+)
+_WINDOWS_LOCAL_DIRS = (
+    "Google/Chrome/User Data", "Microsoft/Edge/User Data", "BraveSoftware",
+    "Mozilla", "Microsoft/Credentials", "Microsoft/Vault", "agy",
+)
+
+
+def sensitive_dirs() -> tuple[Path, ...]:
+    """Carpetas de credenciales que nunca se envían, como rutas absolutas."""
+    home = Path.home().resolve()
+    dirs = [home / d for d in SENSITIVE_HOME_DIRS]
+    if osutil.IS_WINDOWS:
+        # Resueltas como la ruta pedida: así un nombre corto 8.3 o una unión no las esquiva.
+        roaming = Path(os.environ.get("APPDATA", home / "AppData/Roaming")).resolve()
+        local = Path(os.environ.get("LOCALAPPDATA", home / "AppData/Local")).resolve()
+        dirs += [roaming / d for d in _WINDOWS_ROAMING_DIRS]
+        dirs += [local / d for d in _WINDOWS_LOCAL_DIRS]
+    return tuple(dirs)
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-~+/]{12,}=*"),
@@ -83,9 +108,8 @@ def _is_sensitive_name(name: str) -> bool:
 def _reject_if_sensitive(path: Path, raw_path: str) -> None:
     if any(_is_sensitive_name(part) for part in path.parts):
         raise SecurityError(f"archivo sensible bloqueado: {raw_path}")
-    home = Path.home().resolve()
-    for sensitive in SENSITIVE_HOME_DIRS:
-        if _is_within(path, home / sensitive):
+    for sensitive in sensitive_dirs():
+        if _is_within(path, sensitive):
             raise SecurityError(f"carpeta de credenciales bloqueada: {raw_path}")
 
 
@@ -100,6 +124,9 @@ def check_file_access(raw_path: str, settings: Settings, *, local_agent: bool) -
     requested = Path(raw_path).expanduser()
     if not requested.is_absolute():
         raise SecurityError(f"usa rutas absolutas: {raw_path!r}")
+    if osutil.IS_WINDOWS and ":" in str(requested)[2:]:
+        # "archivo:flujo" son flujos alternativos de NTFS: otra forma de nombrar datos.
+        raise SecurityError(f"flujos alternativos de NTFS no permitidos: {raw_path}")
     _reject_if_sensitive(Path(os.path.normpath(requested)), raw_path)
     try:
         real = requested.resolve(strict=True)
@@ -121,24 +148,27 @@ def check_file_access(raw_path: str, settings: Settings, *, local_agent: bool) -
     return real
 
 
-# Variables que los CLIs necesitan para funcionar y encontrar su sesión.
-_CHILD_ENV_KEYS = (
-    "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ",
-    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-    "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
-)
-
-
 def child_env(extra_path: tuple[str, ...] = ()) -> dict[str, str]:
-    """Entorno mínimo para procesos hijos: sin claves de API ni tokens."""
-    env = {k: os.environ[k] for k in _CHILD_ENV_KEYS if k in os.environ}
+    """Entorno mínimo para procesos hijos: sin claves de API ni tokens.
+
+    Solo pasan las variables que los CLIs necesitan para arrancar y encontrar su
+    sesión (lista según el sistema, en ``osutil``) y un PATH fijo.
+    """
+    env = {k: os.environ[k] for k in osutil.CHILD_ENV_KEYS if k in os.environ}
     env.update({k: v for k, v in os.environ.items() if k.startswith("LC_")})
-    home = Path.home()
-    path = [*extra_path, str(home / ".local/bin"), str(home / ".npm-global/bin"),
-            "/usr/local/bin", "/usr/bin", "/bin"]
-    env["PATH"] = ":".join(dict.fromkeys(path))
+    env["PATH"] = os.pathsep.join(dict.fromkeys([*extra_path, *osutil.default_bin_dirs()]))
     env["NO_COLOR"] = "1"
     return env
+
+
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$")
+
+
+def check_model_name(model: str) -> str:
+    """Valida un nombre de modelo que va como argumento de un CLI (nunca empieza por -)."""
+    if model and not _MODEL_RE.match(model):
+        raise SecurityError(f"nombre de modelo no válido: {model!r}")
+    return model
 
 
 def require_https(url: str) -> str:
